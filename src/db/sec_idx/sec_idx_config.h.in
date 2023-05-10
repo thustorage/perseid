@@ -1,0 +1,26 @@
+/* config.h is generated from config.h.in by CMake */
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+static constexpr char PMEM_DIR[] = "/mnt/pmem0/sec_idx/";
+
+#define SEC_IDX_TYPE @SEC_IDX_TYPE@
+
+using SequenceNumber = uint64_t;
+
+namespace leveldb {
+
+namespace config {
+static const bool kUsingValidation = @VALIDATE@;
+static const bool kPruneComponentsBySeq = @PRUNE_SEQ@;
+static const bool kParallelGetPDB = @PAL_PDB@;
+static const int kNumParallelThreads = 4;
+static const bool kIndexOnlyQuery = @IDX_ONLY@;
+// NOTE: only prune if using primary key index!
+static_assert(kUsingValidation || !kPruneComponentsBySeq);
+}  // namespace config
+
+}  // namespace leveldb

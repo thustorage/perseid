@@ -1,0 +1,86 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# wildcards
+.deps
+.dirstamp
+*.la
+.libs
+*.lo
+*.o
+*_test
+# specific files
+/aclocal.m4
+/autom4te.cache/
+/benchmark
+/compile
+/config.guess
+/config.h
+/config.h.in
+/config.h.in~
+/config.log
+/config.status
+/config.sub
+/configure
+/db_bench
+/depcomp
+/install-sh
+/leveldb-dump-all
+/leveldbutil
+/leveldb-verify
+/libpebblesdb.pc
+/libtool
+/ltmain.sh
+/m4/
+/Makefile
+/Makefile.in
+/Makefile.old
+/missing
+/stamp-h1
+config.h
+sec_idx_config.h
+
+.idea/
+.vscode/
+cmake-build-debug/
+testPebblesDB
+gdb.txt
+.autotools
+.cproject
+.project
+.settings/
+nbproject/
+CMakeFiles
+
+build/
+results
