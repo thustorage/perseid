@@ -7,7 +7,7 @@ fi
 
 APP_NAME=sec_idx_bench
 
-cmake .. -DCMAKE_BUILD_TYPE=build \
+cmake .. -DCMAKE_BUILD_TYPE=Release \
 -DSEC_IDX_TYPE=3 \
 -DVALIDATE=true \
 -DPRUNE_SEQ=true \

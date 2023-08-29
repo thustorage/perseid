@@ -5,13 +5,13 @@ if [[ $(basename $PWD) != "scripts" ]]; then
   exit
 fi
 
-FIG_NAME=fig10ab
-TOPK=10
+FIG_NAME=fig10cd
+TOPK=200
 THREADS=(4 8 16 24 32)
 
 for t in ${THREADS[@]}; do
-  PRELOAD="/mnt/lsm_eval/trace/th${t}/skew_pri_upsert"
-  TRACE="/mnt/lsm_eval/trace/th${t}/get_sec"
+  PRELOAD="/mnt/lsm_eval/trace/th${t}/skew_sec_upsert"
+  TRACE="/mnt/lsm_eval/trace/th${t}/skew_sec_get"
 
   if [[ $# < 1 || $1 != "others" ]]; then
     # pmasstree-perseid

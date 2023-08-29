@@ -2525,6 +2525,168 @@ Status DBImpl::LSMSGet(const ReadOptions& options, const Slice& skey,
   return s;
 }
 
+#ifdef USE_NAIVE_PARALLEL_GET
+Status DBImpl::ParallelSGet(const ReadOptions& options, const Slice& skey,
+                            std::vector<KeyValuePair>* value_list, DB* db,
+                            DB* pri_key_index) {
+  Status s;
+  MutexLock l(&mutex_);
+  SequenceNumber snapshot;
+  if (options.snapshot != NULL) {
+    snapshot = reinterpret_cast<const SnapshotImpl*>(options.snapshot)->number_;
+  } else {
+    snapshot = versions_->LastSequence();
+  }
+
+  MemTable* mem = mem_;
+  MemTable* imm = imm_;
+  Version* current = versions_->current();
+  mem->Ref();
+  if (imm != NULL) {
+    imm->Ref();
+  }
+  current->Ref();
+
+  // Unlock while reading from files and memtables
+  {
+    mutex_.Unlock();
+    // First look in the memtable, then in the immutable memtable (if any).
+    LookupKey lkey(skey, snapshot);
+
+    std::string mem_value, imm_value;
+    int kNoOfOutputs = options.num_records;
+
+    std::vector<KeyValuePair> local_value_list[config::kNumParallelThreads];
+    for (int i = 0; i < config::kNumParallelThreads; ++i) {
+      sget_local_naive_[i].options = options;
+      sget_local_naive_[i].options.ClearStats();
+      sget_local_naive_[i].head = 0;
+      sget_local_naive_[i].finish_flag.store(false, std::memory_order_relaxed);
+      sget_local_naive_[i].value_list = &local_value_list[i];
+      sget_local_naive_[i].pkey_vec.resize(kNoOfOutputs);
+    }
+
+    sget_share_.pkey_vec.resize(kNoOfOutputs);
+    sget_share_.pri_db = db;
+    sget_share_.end_flag.store(false, std::memory_order_relaxed);
+    sget_share_.g_epoch.fetch_add(1, std::memory_order_release);
+
+    // int cur_parallel_thread = 0;
+    std::set<std::string> resultSetofKeysFound;
+    int total_cnt = 0;
+    if (mem->SGet(lkey, &mem_value, &s)) {
+      // Perform Read Repair by Get(pKey) on memtable values
+      const_cast<ReadOptions&>(options).num_sec_probe++;
+      const char *p = mem_value.data();
+      const char *end = mem_value.data() + mem_value.length();
+      while (p < end && kNoOfOutputs > 0) {
+        int sz = *(int *)p;
+        p += sizeof(int);
+        std::string pkey(p, sz - sizeof(SequenceNumber));
+        if (!resultSetofKeysFound.contains(pkey)) {
+          bool check_skip = false;
+          SequenceNumber cur_seq =
+              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+          if (config::kUsingValidation) {
+            StopWatch<uint64_t> t((uint64_t&)options.time_validate);
+            std::string new_seq_val;
+            Status db_status = pri_key_index->Get(options, pkey, &new_seq_val);
+            if (db_status.ok() && !db_status.IsNotFound()) {
+              SequenceNumber new_seq = *(SequenceNumber *)new_seq_val.data();
+              // primary key index checked
+              if (new_seq != cur_seq) {
+                check_skip = true;
+              }
+            }
+          }
+          if (!check_skip) {
+            SGetLocalNaive& cur_local =
+                sget_local_naive_[total_cnt % config::kNumParallelThreads];
+            cur_local.pkey_vec[cur_local.head] = PKeyItem(cur_seq, pkey);
+            cur_local.head.fetch_add(1, std::memory_order_release);
+            --kNoOfOutputs;
+            resultSetofKeysFound.insert(pkey);
+            ++total_cnt;
+          }
+        }
+        p += sz;
+      }
+    }
+
+    if (imm != NULL && kNoOfOutputs > 0) {
+      if (imm->SGet(lkey, &imm_value, &s)) {
+        const_cast<ReadOptions&>(options).num_sec_probe++;
+        const char* p = imm_value.data();
+        const char* end = imm_value.data() + imm_value.length();
+        while (p < end && kNoOfOutputs > 0) {
+          int sz = *(int*)p;
+          p += sizeof(int);
+          std::string pkey(p, sz - sizeof(SequenceNumber));
+          if (!resultSetofKeysFound.contains(pkey)) {
+            bool check_skip = false;
+            SequenceNumber cur_seq =
+                *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+            if (config::kUsingValidation) {
+              StopWatch<uint64_t> t((uint64_t&)options.time_validate);
+              std::string new_seq_val;
+              Status db_status =
+                  pri_key_index->Get(options, pkey, &new_seq_val);
+              if (db_status.ok() && !db_status.IsNotFound()) {
+                SequenceNumber new_seq = *(SequenceNumber*)new_seq_val.data();
+                // primary key index checked
+                if (new_seq != cur_seq) {
+                  check_skip = true;
+                }
+              }
+            }
+            if (!check_skip) {
+              SGetLocalNaive& cur_local =
+                  sget_local_naive_[total_cnt % config::kNumParallelThreads];
+              cur_local.pkey_vec[cur_local.head] = PKeyItem(cur_seq, pkey);
+              cur_local.head.fetch_add(1, std::memory_order_release);
+              --kNoOfOutputs;
+              resultSetofKeysFound.insert(pkey);
+              ++total_cnt;
+            }
+          }
+          p += sz;
+        }
+      }
+    }
+
+    if (kNoOfOutputs > 0) {
+      s = current->ParallelSGetNaive(options, sget_local_naive_, total_cnt,
+                                     lkey, kNoOfOutputs, &resultSetofKeysFound,
+                                     pri_key_index);
+    }
+
+    sget_share_.end_flag.store(true, std::memory_order_release);
+
+    for (int i = 0; i < config::kNumParallelThreads; ++i) {
+      while (!sget_local_naive_[i].finish_flag.load(std::memory_order_relaxed))
+        ;
+      ((ReadOptions&)options).MergeStats(sget_local_naive_[i].options);
+    }
+
+    mutex_.Lock();
+
+    for (int i = 0; i < total_cnt; ++i) {
+      KeyValuePair& kvp = local_value_list[i % config::kNumParallelThreads]
+                                          [i / config::kNumParallelThreads];
+      if (!kvp.key.empty()) {
+        value_list->emplace_back(kvp);
+      }
+    }
+  }
+
+  mem->Unref();
+  if (imm != NULL) {
+    imm->Unref();
+  }
+  current->Unref();
+  return s;
+}
+#else
 // parallel thread
 Status DBImpl::ParallelSGet(const ReadOptions& options, const Slice& skey,
                             std::vector<KeyValuePair>* value_list, DB* db,
@@ -2646,7 +2808,6 @@ Status DBImpl::ParallelSGet(const ReadOptions& options, const Slice& skey,
               --kNoOfOutputs;
               resultSetofKeysFound.insert(pkey);
             }
-            resultSetofKeysFound.insert(pkey);
           }
           p += sz;
         }
@@ -2686,6 +2847,7 @@ Status DBImpl::ParallelSGet(const ReadOptions& options, const Slice& skey,
   current->Unref();
   return s;
 }
+#endif
 
 Status DBImpl::SecScanPKeyOnly(const ReadOptions& options, const Slice& skey,
                                std::vector<std::string>* pkey_list) {
@@ -2770,6 +2932,52 @@ Status DBImpl::LSMSScanPKeyOnly(const ReadOptions& options, const Slice& skey,
   return Status::OK();
 }
 
+
+#ifdef USE_NAIVE_PARALLEL_GET
+void DBImpl::SGetPDBFuncNaive(int tid) {
+  SGetLocalNaive& local = sget_local_naive_[tid];
+  int consume_epoch = 0;
+  while (!sget_share_.stop_flag.load(std::memory_order_relaxed)) {
+    while (consume_epoch ==
+           sget_share_.g_epoch.load(std::memory_order_relaxed)) {
+      if (sget_share_.stop_flag.load(std::memory_order_relaxed)) {
+        return;
+      }
+    }
+
+    DB* pri_db = sget_share_.pri_db;
+    int head, tail = 0;
+    while (!sget_share_.end_flag.load(std::memory_order_acquire) ||
+           tail < local.head.load(std::memory_order_relaxed)) {
+      head = local.head.load(std::memory_order_relaxed);
+      while (tail < head) {
+        std::string pValue;
+        std::string pkey = local.pkey_vec[tail].pkey;
+        SequenceNumber cur_seq = local.pkey_vec[tail].seq;
+        SequenceNumber seq = cur_seq;
+        Status s;
+        {
+          StopWatch<uint64_t> t(local.options.time_pdb);
+          s = pri_db->Get(local.options, pkey, &pValue, &seq);
+        }
+        if (s.ok() && !s.IsNotFound()) {
+          if (seq == cur_seq) {
+            local.value_list->emplace_back(pkey, pValue);
+          } else {
+            local.value_list->emplace_back("", "");
+          }
+        } else {
+          local.value_list->emplace_back("", "");
+        }
+        ++tail;
+      }
+    }
+
+    ++consume_epoch;
+    local.finish_flag.store(true, std::memory_order_relaxed);
+  }
+}
+#else
 void DBImpl::SGetPDBFunc(int tid) {
   SGetLocal& local = sget_local_[tid];
   int consume_epoch = 0;
@@ -2821,6 +3029,7 @@ void DBImpl::SGetPDBFunc(int tid) {
     local.finish_flag.store(true, std::memory_order_relaxed);
   }
 }
+#endif
 
 // Convenience methods
 Status DBImpl::Put(const WriteOptions& o, const Slice& key, const Slice& val) {
@@ -3550,7 +3759,11 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
     impl->is_secondarydb = true;
     if (config::kParallelGetPDB) {
       for (int i = 0; i < config::kNumParallelThreads; ++i) {
+#ifdef USE_NAIVE_PARALLEL_GET
+        impl->get_pdb_th_[i] = std::thread(&DBImpl::SGetPDBFuncNaive, impl, i);
+#else
         impl->get_pdb_th_[i] = std::thread(&DBImpl::SGetPDBFunc, impl, i);
+#endif
       }
     }
   }

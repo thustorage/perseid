@@ -1151,6 +1151,154 @@ Status Version::Get(const ReadOptions& options,
 }
 
 // parallel
+Status Version::ParallelSGetNaive(const ReadOptions& options,
+                                  SGetLocalNaive* local_naive, int& total_cnt,
+                                  const LookupKey& k, int kNoOfOutputs,
+                                  std::set<std::string>* resultSetofKeysFound,
+                                  DB* pri_key_index) {
+  Slice ikey = k.internal_key();
+  Slice user_key = k.user_key();
+  const Comparator* ucmp = vset_->icmp_.user_comparator();
+  Status s;
+
+  // We can search level-by-level since entries never hop across
+  // levels.  Therefore we are guaranteed that if we find data
+  // in an smaller level, later levels are irrelevant.
+  std::vector<FileMetaData*> tmp;
+  // FileMetaData* tmp2;
+  // int valueSize = 0;
+  for (unsigned level = 0; level < config::kNumLevels && kNoOfOutputs > 0;
+       level++) {
+    std::vector<FileMetaData*> tmp2;
+    size_t num_files = files_[level].size();
+    size_t num_guards = guards_[level].size();
+    if (num_files == 0) {
+      continue;
+    }
+
+    // Get the list of files to search in this level
+    FileMetaData* const* files = &files_[level][0];
+    // Get the guard_index in whose range the key lies in
+    uint32_t guard_index = FindGuard(vset_->icmp_, guards_[level], ikey);
+    // Once we find the guard, we need to do binary searches inside
+    // the files of each guard.
+    GuardMetaData* g;
+    if (num_guards > 0) {
+      g = guards_[level][guard_index];
+    }
+
+    // If the guard chosen is the first in the level and if the lookup key is
+    // less than the guard key of the first guard, it means that the key might
+    // be present in one of the sentinel files of that level.
+    if (num_guards == 0 ||
+        (guard_index == 0 && num_guards > 0 &&
+         ucmp->Compare(g->guard_key.user_key(), user_key) > 0)) {
+      for (size_t i = 0; i < sentinel_files_[level].size(); i++) {
+        FileMetaData* f = sentinel_files_[level][i];
+        if (f != NULL && ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
+            ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
+          tmp2.push_back(f);
+        }
+      }
+      std::sort(tmp2.begin(), tmp2.end(), NewestFirst);
+      files = &tmp2[0];
+      num_files = tmp2.size();
+    } else if (g->number_segments > 0) {
+      for (size_t i = 0; i < g->number_segments; i++) {
+        FileMetaData* f = g->file_metas[i];
+        if (f != NULL && ucmp->Compare(user_key, f->smallest.user_key()) >= 0 &&
+            ucmp->Compare(user_key, f->largest.user_key()) <= 0) {
+          tmp2.push_back(f);
+        }
+      }
+      std::sort(tmp2.begin(), tmp2.end(), NewestFirst);
+      files = &tmp2[0];
+      num_files = tmp2.size();
+    } else {
+      files = NULL;
+      num_files = 0;
+    }
+
+    std::string val;
+    for (uint32_t i = 0; i < num_files; ++i) {
+      // Iterate through the files and do binary search.
+      FileMetaData* f = files[i];
+      // bool key_may_match = true;
+
+#ifdef FILE_LEVEL_FILTER
+      std::string* filter_string = vset_->file_level_bloom_filter[f->number];
+      if (filter_string != NULL) {
+        Slice filter_slice =
+            Slice(filter_string->data(), filter_string->size());
+        bool key_may_match =
+            vset_->options_->filter_policy->KeyMayMatch(ikey, filter_slice);
+        if (!key_may_match) {
+          continue;
+        }
+      }
+#endif
+
+      Saver saver;
+      saver.state = kNotFound;
+      saver.ucmp = ucmp;
+      saver.user_key = user_key;
+      saver.value = &val;
+
+      s = vset_->table_cache_->Get(options, f->number, f->file_size,
+                                   ikey, &saver, SaveValue, vset_->timer);
+      num_files_read++;
+      const_cast<ReadOptions&>(options).num_sec_probe++;
+
+      // TODO kDeleted!
+      if (s.ok() && !s.IsNotFound() && saver.state == kFound) {
+        // const_cast<ReadOptions&>(options).num_from++;
+        const char* p = val.data();
+        const char* end = val.data() + val.length();
+        while (p < end && kNoOfOutputs > 0) {
+          int sz = *(int*)p;
+          p += sizeof(int);
+          std::string pkey(p, sz - sizeof(SequenceNumber));
+          std::string pValue;
+          if (!resultSetofKeysFound->contains(pkey)) {
+            bool pass = false;
+            SequenceNumber cur_seq =
+                *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+            if (config::kUsingValidation) {
+              StopWatch<uint64_t> t((uint64_t&)options.time_validate);
+              std::string new_seq_val;
+              Status db_status =
+                  pri_key_index->Get(options, pkey, &new_seq_val);
+              if (db_status.ok() && !db_status.IsNotFound()) {
+                SequenceNumber new_seq = *(SequenceNumber *)new_seq_val.data();
+                // primary key index checked
+                if (new_seq != cur_seq) {
+                  pass = true;
+                }
+              }
+            }
+            if (!pass) {
+              SGetLocalNaive& cur_local =
+                  local_naive[total_cnt % config::kNumParallelThreads];
+              cur_local.pkey_vec[cur_local.head] = PKeyItem(cur_seq, pkey);
+              cur_local.head.fetch_add(1, std::memory_order_release);
+              --kNoOfOutputs;
+              resultSetofKeysFound->insert(pkey);
+              ++total_cnt;
+            }
+          }
+          p += sz;
+        }
+
+        if (kNoOfOutputs <= 0) {
+          break;  // break for files
+        }
+      }
+    }
+
+  }  // iter for level
+  return s;
+}
+
 Status Version::ParallelSGet(const ReadOptions& options, SGetShare* share,
                              int& total_cnt, const LookupKey& k,
                              int kNoOfOutputs,

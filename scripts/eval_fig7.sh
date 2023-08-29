@@ -8,3 +8,4 @@ fi
 ./sub/eval_fig7a.sh $@
 ./sub/eval_fig7b.sh $@
 ./sub/eval_fig7c.sh $@
+./sub/eval_fig7d.sh $@

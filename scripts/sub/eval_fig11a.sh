@@ -8,7 +8,7 @@ fi
 APP_NAME=sec_idx_bench
 FIG_NAME=fig11a
 PRELOAD="/mnt/lsm_eval/trace/insert_80M.txt"
-TRACE="/mnt/lsm_eval/trace/mixed/write_heavy.txt"
+TRACE="/mnt/lsm_eval/trace/new_mixed/write_heavy.txt"
 
 ulimit -n 65535
 
@@ -21,9 +21,9 @@ if [[ $# < 1 || $1 != "others" ]]; then
   SEC_IDX_NAME_ARR=(perseid)
 else
   RES_DIR="../results/others"
-  # lsmsi-pm, pmasstree-composite
-  SEC_IDX_TYPE_ARR=(2 4)
-  SEC_IDX_NAME_ARR=(lsmsi-pm pmasstree-composite)
+  # lsmsi-pm, pmasstree-composite, pmasstree-log
+  SEC_IDX_TYPE_ARR=(2 4 5)
+  SEC_IDX_NAME_ARR=(lsmsi-pm pmasstree-composite pmasstree-log)
 fi
 
 mkdir -p ${RES_DIR}

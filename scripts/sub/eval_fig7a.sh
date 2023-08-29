@@ -15,4 +15,4 @@ else
   TYPE=others
 fi
 
-./helper/index_only_helper.sh "${FIG_NAME}" "${TYPE}" "${PRELOAD}" "${TRACE}" "10,100"
+./helper/index_only_helper.sh "${FIG_NAME}" "${TYPE}" "${PRELOAD}" "${TRACE}" "10,200"

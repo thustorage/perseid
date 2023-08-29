@@ -66,7 +66,7 @@ class CCEH {
   bool Delete(const Key_t &);
   Value_t Get(const Key_t &);
   bool SetSeqCnt(const Key_t &, const Value_t &);
-  bool CheckSeqCnt(const Key_t &, const Value_t &);
+  bool CheckSeqCnt(const Key_t &, const Value_t &, bool);
   Value_t FindAnyway(const Key_t &);
   double Utilization(void);
   size_t Capacity(void);

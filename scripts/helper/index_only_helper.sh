@@ -19,7 +19,7 @@ TOPK=$5
 if [[ $2 != "others" ]]; then
   ### perseid
   # FAST&FAIR-perseid, P-Masstree-perseid
-  SEC_IDX_TYPE_ARR=(6 3)
+  SEC_IDX_TYPE_ARR=(6)
 else
   ### others
   # LSMSI, LSMSI-PM, FAST&FAIR-composite, FAST&FAIR-log, P-Masstree-composite, P-Masstree-log

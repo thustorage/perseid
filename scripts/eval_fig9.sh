@@ -5,5 +5,6 @@ if [[ $(basename $PWD) != "scripts" ]]; then
   exit
 fi
 
-./sub/eval_fig9ac.sh $@
-./sub/eval_fig9bd.sh $@
+./sub/eval_fig9ad.sh $@
+./sub/eval_fig9be.sh $@
+./sub/eval_fig9cf.sh $@

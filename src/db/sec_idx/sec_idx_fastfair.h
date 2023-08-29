@@ -29,6 +29,7 @@ class SecIdxFastFair : public SecIdx {
       cceh_ = new CCEH_NAMESPACE::CCEH("cceh_pool", 1024);
       // vol_cceh_ = new CCEH_NAMESPACE::CCEH("", 1024);
       vol_pri_key_idx_ = clht_create(512 * 1024);
+      // pri_key_idx_ = clht_create(512 * 1024);
     }
     if (leveldb::config::kParallelGetPDB) {
       for (int i = 0; i < num_parallel_threads; ++i) {
@@ -47,7 +48,10 @@ class SecIdxFastFair : public SecIdx {
     if (leveldb::config::kUsingValidation) {
       delete cceh_;
       // delete vol_cceh_;
+      // ht_status(vol_pri_key_idx_, 1, 1);
+      // ht_status(pri_key_idx_, 1, 1);
       clht_destroy(vol_pri_key_idx_);
+      // clht_destroy(pri_key_idx_);
     }
     for (int i = 0; i < num_parallel_threads; ++i) {
       if (pdb_func_[i].joinable()) {
@@ -64,6 +68,7 @@ class SecIdxFastFair : public SecIdx {
                                ? *(uint64_t *)pkey.data()
                                : MurmurHash64A(pkey.data(), pkey.size());
       bool new_item = cceh_->SetSeqCnt(pkey_hash, seq);
+      // clht_set_seqcnt(pri_key_idx_, pkey_hash, seq);
       if (!new_item) {
         // vol_cceh_->SetSeqCnt(pkey_hash, seq);
         clht_set_seqcnt(vol_pri_key_idx_, pkey_hash, seq);
@@ -297,11 +302,14 @@ class SecIdxFastFair : public SecIdx {
 
           bool check_skip = false;
           if (leveldb::config::kUsingValidation) {
-            // StopWatch<uint64_t> t((uint64_t &)options.time_validate);
+            StopWatch<uint64_t> t((uint64_t &)options.time_validate);
 
             uint64_t pkey_hash = pkey.size() <= sizeof(uint64_t)
                                      ? *(uint64_t *)pkey.data()
                                      : MurmurHash64A(pkey.data(), pkey.size());
+            // PM-hash
+            // bool equal = cceh_->CheckSeqCnt(pkey_hash, pke_seq, false);
+            // DRAM-hash
             bool equal = clht_check_seqcnt(vol_pri_key_idx_->ht, pkey_hash,
                                            pke_seq, true);
             if (!equal) {
@@ -412,6 +420,7 @@ class SecIdxFastFair : public SecIdx {
   CCEH_NAMESPACE::CCEH *cceh_ = nullptr;
   // CCEH_NAMESPACE::CCEH *vol_cceh_;
   clht *vol_pri_key_idx_ = nullptr;
+  // clht *pri_key_idx_ = nullptr;
 };
 
 } // namespace leveldb

@@ -325,8 +325,14 @@ class DBImpl : public DB {
   SGetShare sget_share_;
   SGetLocal sget_local_[config::kNumParallelThreads];
   std::thread get_pdb_th_[config::kNumParallelThreads];
-
+// defined in sec_idx.h
+#ifdef USE_NAIVE_PARALLEL_GET
+  SGetLocalNaive sget_local_naive_[config::kNumParallelThreads];
+  void SGetPDBFuncNaive(int tid);
+#else
   void SGetPDBFunc(int tid);
+#endif
+
 
   SecIdx *sec_idx = nullptr;
   std::atomic_uint_fast64_t global_seq_{0};

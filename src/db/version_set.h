@@ -174,6 +174,11 @@ class Version {
               std::vector<KeyValuePair>* value, GetStats* stats,
               int kNoOfOutputs, DB* db,
               std::set<std::string>* resultSetofKeysFound, DB* pri_key_index);
+  Status ParallelSGetNaive(const ReadOptions& options,
+                           SGetLocalNaive* local_naive, int& total_cnt,
+                           const LookupKey& k, int kNoOfOutputs,
+                           std::set<std::string>* resultSetofKeysFound,
+                           DB* pri_key_index);
   Status ParallelSGet(const ReadOptions& options, SGetShare* share,
                       int& total_cnt, const LookupKey& k, int kNoOfOutputs,
                       std::set<std::string>* resultSetofKeysFound,

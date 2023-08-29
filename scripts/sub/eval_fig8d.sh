@@ -5,9 +5,9 @@ if [[ $(basename $PWD) != "scripts" ]]; then
   exit
 fi
 
-FIG_NAME=fig8c
-PRELOAD=/mnt/lsm_eval/trace/skew_pri_upsert_200M.txt
-TRACE=/mnt/lsm_eval/trace/uniform_get_sec.txt
+FIG_NAME=fig8d
+PRELOAD=/mnt/lsm_eval/trace/skew_sec_upsert_200M.txt
+TRACE=/mnt/lsm_eval/trace/skew_sec_get.txt
 
 if [[ $# < 1 || $1 != "others" ]]; then
   # pmasstree-perseid
@@ -18,5 +18,5 @@ else
   # pmasstree-composite
   ./helper/index_only_helper_indiv.sh "${FIG_NAME}" 4 "${PRELOAD}" "${TRACE}" "10" "true"
   # pmasstree-log
-  ./helper/index_only_helper_indiv.sh "${FIG_NAME}" 5 "${PRELOAD}" "${TRACE}" "10" "true" 
+  ./helper/index_only_helper_indiv.sh "${FIG_NAME}" 5 "${PRELOAD}" "${TRACE}" "10" "true"
 fi

@@ -505,7 +505,8 @@ DIR_RETRY:
   goto RETRY;
 }
 
-bool CCEH::CheckSeqCnt(const Key_t &key, const Value_t &val) {
+bool CCEH::CheckSeqCnt(const Key_t &key, const Value_t &val,
+                       bool update_if_miss) {
   auto f_hash = hash_funcs[0](&key, sizeof(Key_t), f_seed);
   auto f_idx = (f_hash & kMask) * kNumPairPerCacheLine;
 
@@ -545,7 +546,7 @@ RETRY:
       SeqCnt entry_val;
       entry_val._data = target->_[loc].value;
       bool equal = entry_val.seq_ == val;
-      if (!equal) {
+      if (!equal && update_if_miss) {
         entry_val.cnt_--;
         if (entry_val.cnt_ == 0) {
           // delete this entry
@@ -568,7 +569,6 @@ RETRY:
 #endif
   return true;
 }
-
 
 // TODO
 bool CCEH::Delete(const Key_t &key) { return false; }

@@ -17,4 +17,6 @@ else
   ./helper/index_only_helper_indiv.sh "${FIG_NAME}" 2 "${PRELOAD}" "${TRACE}" "10" "true" 
   # pmasstree-composite
   ./helper/index_only_helper_indiv.sh "${FIG_NAME}" 4 "${PRELOAD}" "${TRACE}" "10" "true" 
+  # pmasstree-log
+  ./helper/index_only_helper_indiv.sh "${FIG_NAME}" 5 "${PRELOAD}" "${TRACE}" "10" "true" 
 fi
