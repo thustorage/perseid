@@ -32,6 +32,9 @@ message(STATUS "SET PAL_PDB ${PAL_PDB}")
 set(IDX_ONLY true CACHE STRING "kIndexOnlyQuery")
 message(STATUS "SET IDX_ONLY ${IDX_ONLY}")
 
+set(LSMSI_SYNC false CACHE STRING "kLSMSync")
+message(STATUS "SET LSMSI_SYNC ${LSMSI_SYNC}")
+
 configure_file(
     "${PROJECT_SOURCE_DIR}/src/db/sec_idx/sec_idx_config.h.in"
     "${PROJECT_SOURCE_DIR}/src/db/sec_idx/sec_idx_config.h"

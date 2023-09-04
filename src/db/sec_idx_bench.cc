@@ -174,6 +174,7 @@ void run_trace(leveldb::DB *db, std::string trace, int tid,
       val_sz = std::stoul(x[3]);
       leveldb::Slice pkey((const char *)&pk, sizeof(uint64_t));
       leveldb::Slice skey((const char *)&sk, sizeof(uint64_t));
+      memcpy(content, skey.data(), skey.size());
       leveldb::Status s =
           db->PutWithSec(woptions, pkey, skey, leveldb::Slice(content, val_sz));
       if (!s.ok()) {

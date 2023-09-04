@@ -21,6 +21,8 @@ static const int kNumParallelThreads = 4;
 static const bool kIndexOnlyQuery = @IDX_ONLY@;
 // NOTE: only prune if using primary key index!
 static_assert(kUsingValidation || !kPruneComponentsBySeq);
+static const bool kLSMSISync = @LSMSI_SYNC@;
+static_assert(!(kLSMSISync && kUsingValidation));
 }  // namespace config
 
 }  // namespace leveldb

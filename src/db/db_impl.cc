@@ -1673,7 +1673,11 @@ Status DBImpl::DoCompactionWorkGuards(CompactionState* compact,
           // p += sizeof(int);
           std::string v(p, sz + sizeof(int));
           std::string user_pkey(p + sizeof(int), sz - sizeof(SequenceNumber));
-          if (!buffer_pkeys.contains(user_pkey)) {
+          SequenceNumber seq =
+              *(SequenceNumber*)(p + sizeof(int) + sz - sizeof(SequenceNumber));
+          if (seq == -1) {
+            buffer_pkeys.insert(user_pkey);
+          } else if (!buffer_pkeys.contains(user_pkey)) {
             tmp_posting_list.append(v);
             buffer_pkeys.insert(user_pkey);
           }
@@ -2163,7 +2167,51 @@ void DBImpl::ReleaseSnapshot(const Snapshot* s) {
 
 Status DBImpl::PutWithSec(const WriteOptions& options, const Slice& pkey,
                           const Slice& skey, const Slice& value) {
-  if (config::kIndexOnlyQuery) {
+  if (config::kLSMSISync || !config::kIndexOnlyQuery) {
+    Status sdb_status;
+    int sz = pkey.size() + 8;
+    if (config::kLSMSISync) {
+      // StopWatch<uint64_t> sw((uint64_t&)options.sec_idx_write_time);
+      // remove old skey_pkey
+      ReadOptions ro;
+      std::string old_pri_val;
+      Status pri_status = this->Get(ro, pkey, &old_pri_val);
+      if (pri_status.ok()) {
+        Slice old_skey = Slice(old_pri_val.data(), skey.size());
+        std::string del_key_list((const char*)&sz, sizeof(int));
+        del_key_list.append(pkey.data(), pkey.size());
+        SequenceNumber del_seq = -1;
+        del_key_list.append((const char*)&del_seq, sizeof(SequenceNumber));
+        sdb_status = this->sdb->Put(options, old_skey, del_key_list);
+      }
+    }
+
+    WriteBatch batch;
+    batch.Put(pkey, value);
+    Status status = Write(options, &batch);
+
+    if (status.ok()) {
+      // StopWatch<uint64_t> sw((uint64_t &)options.sec_idx_write_time);
+      SequenceNumber seq = WriteBatchInternal::Sequence(&batch);
+#if SEC_IDX_TYPE > 2
+      sdb_status = this->sec_idx->SInsert(skey, pkey, seq);
+#else
+      // format: 4B sz + key + 8B seq_no
+      std::string new_key_list((const char*)&sz, sizeof(int));
+      new_key_list.append(pkey.data(), pkey.size());
+      new_key_list.append((const char*)&seq, sizeof(SequenceNumber));
+      sdb_status = this->sdb->Put(options, skey, new_key_list);
+      if (sdb_status.ok() && config::kUsingValidation) {
+        sdb_status = this->primary_key_index->Put(
+            options, pkey, Slice((const char*)&seq, sizeof(SequenceNumber)));
+      }
+#endif
+      return sdb_status;
+    }
+    return status;
+  } else {
+    // StopWatch<uint64_t> sw((uint64_t &)options.sec_idx_write_time);
+
     SequenceNumber seq = global_seq_.fetch_add(1, std::memory_order_relaxed);
     Status sdb_status;
 #if SEC_IDX_TYPE > 2
@@ -2181,31 +2229,6 @@ Status DBImpl::PutWithSec(const WriteOptions& options, const Slice& pkey,
     }
 #endif
     return sdb_status;
-  } else {
-    WriteBatch batch;
-    batch.Put(pkey, value);
-    Status status = Write(options, &batch);
-
-    if (status.ok()) {
-      Status sdb_status;
-      SequenceNumber seq = WriteBatchInternal::Sequence(&batch);
-#if SEC_IDX_TYPE > 2
-      sdb_status = this->sec_idx->SInsert(skey, pkey, seq);
-#else
-      // format: 4B sz + key + 8B seq_no
-      int sz = pkey.size() + 8;
-      std::string new_key_list((const char*)&sz, sizeof(int));
-      new_key_list.append(pkey.data(), pkey.size());
-      new_key_list.append((const char*)&seq, sizeof(SequenceNumber));
-      sdb_status = this->sdb->Put(options, skey, new_key_list);
-      if (config::kUsingValidation && sdb_status.ok()) {
-        sdb_status = this->primary_key_index->Put(
-            options, pkey, Slice((const char*)&seq, sizeof(SequenceNumber)));
-      }
-#endif
-      return sdb_status;
-    }
-    return status;
   }
 }
 
@@ -2262,9 +2285,10 @@ Status DBImpl::LSMSGetPKeyOnly(const ReadOptions& options, const Slice& skey,
         std::string pkey(p, sz - sizeof(SequenceNumber));
         SequenceNumber cur_seq =
             *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
-        bool valid = false;
-
-        if (!result_keys_found.contains(pkey)) {
+        bool valid = config::kLSMSISync;
+        if (cur_seq == -1) {
+          result_keys_found.insert(pkey);
+        } else if (!result_keys_found.contains(pkey)) {
           if (config::kUsingValidation) {
             StopWatch<uint64_t> t((uint64_t&)options.time_validate);
             std::string new_seq_val;
@@ -2273,7 +2297,7 @@ Status DBImpl::LSMSGetPKeyOnly(const ReadOptions& options, const Slice& skey,
               SequenceNumber new_seq = *(SequenceNumber*)new_seq_val.data();
               valid = new_seq == cur_seq;
             }
-          } else {
+          } else if (!config::kLSMSISync) {
             // check primary index
             StopWatch<uint64_t> t((uint64_t&)options.time_pdb);
             std::string value;
@@ -2303,9 +2327,10 @@ Status DBImpl::LSMSGetPKeyOnly(const ReadOptions& options, const Slice& skey,
           std::string pkey(p, sz - sizeof(SequenceNumber));
           SequenceNumber cur_seq =
               *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
-          bool valid = false;
-
-          if (!result_keys_found.contains(pkey)) {
+          bool valid = config::kLSMSISync;
+          if (cur_seq == -1) {
+            result_keys_found.insert(pkey);
+          } else if (!result_keys_found.contains(pkey)) {
             if (config::kUsingValidation) {
               StopWatch<uint64_t> t((uint64_t&)options.time_validate);
               std::string new_seq_val;
@@ -2315,7 +2340,7 @@ Status DBImpl::LSMSGetPKeyOnly(const ReadOptions& options, const Slice& skey,
                 SequenceNumber new_seq = *(SequenceNumber*)new_seq_val.data();
                 valid = new_seq == cur_seq;
               }
-            } else {
+            } else if (!config::kLSMSISync) {
               // check primary index
               StopWatch<uint64_t> t((uint64_t&)options.time_pdb);
               std::string value;
@@ -2414,7 +2439,11 @@ Status DBImpl::LSMSGet(const ReadOptions& options, const Slice& skey,
         p += sizeof(int);
         std::string pkey(p, sz - sizeof(SequenceNumber));
         std::string pValue;
-        if (!resultSetofKeysFound.contains(pkey)) {
+        SequenceNumber cur_seq =
+            *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+        if (cur_seq == -1) {
+          resultSetofKeysFound.insert(pkey);
+        } else if (!resultSetofKeysFound.contains(pkey)) {
           Status db_status;
           SequenceNumber seq = -1;
           bool pass = false;
@@ -2424,8 +2453,6 @@ Status DBImpl::LSMSGet(const ReadOptions& options, const Slice& skey,
             db_status = pri_key_index->Get(options, pkey, &new_seq_val);
             if (db_status.ok() && !db_status.IsNotFound()) {
               SequenceNumber new_seq = *(SequenceNumber *)new_seq_val.data();
-              SequenceNumber cur_seq =
-                  *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
               // primary key index checked
               if (new_seq == cur_seq) {
                 seq = cur_seq;
@@ -2466,7 +2493,11 @@ Status DBImpl::LSMSGet(const ReadOptions& options, const Slice& skey,
           p += sizeof(int);
           std::string pkey(p, sz - sizeof(SequenceNumber));
           std::string pValue;
-          if (!resultSetofKeysFound.contains(pkey)) {
+          SequenceNumber cur_seq =
+              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+          if (cur_seq == -1) {
+            resultSetofKeysFound.insert(pkey);
+          } else if (!resultSetofKeysFound.contains(pkey)) {
             Status db_status;
             SequenceNumber seq = -1;
             bool pass = false;
@@ -2476,8 +2507,6 @@ Status DBImpl::LSMSGet(const ReadOptions& options, const Slice& skey,
               db_status = pri_key_index->Get(options, pkey, &new_seq_val);
               if (db_status.ok() && !db_status.IsNotFound()) {
                 SequenceNumber new_seq = *(SequenceNumber*)new_seq_val.data();
-                SequenceNumber cur_seq =
-                    *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
                 // primary key index checked
                 if (new_seq == cur_seq) {
                   seq = cur_seq;
@@ -2583,10 +2612,12 @@ Status DBImpl::ParallelSGet(const ReadOptions& options, const Slice& skey,
         int sz = *(int *)p;
         p += sizeof(int);
         std::string pkey(p, sz - sizeof(SequenceNumber));
-        if (!resultSetofKeysFound.contains(pkey)) {
+        SequenceNumber cur_seq =
+            *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+        if (cur_seq == -1) {
+          resultSetofKeysFound.insert(pkey);
+        } else if (!resultSetofKeysFound.contains(pkey)) {
           bool check_skip = false;
-          SequenceNumber cur_seq =
-              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
           if (config::kUsingValidation) {
             StopWatch<uint64_t> t((uint64_t&)options.time_validate);
             std::string new_seq_val;
@@ -2622,10 +2653,12 @@ Status DBImpl::ParallelSGet(const ReadOptions& options, const Slice& skey,
           int sz = *(int*)p;
           p += sizeof(int);
           std::string pkey(p, sz - sizeof(SequenceNumber));
-          if (!resultSetofKeysFound.contains(pkey)) {
+          SequenceNumber cur_seq =
+              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+          if (cur_seq == -1) {
+            resultSetofKeysFound.insert(pkey);
+          } else if (!resultSetofKeysFound.contains(pkey)) {
             bool check_skip = false;
-            SequenceNumber cur_seq =
-                *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
             if (config::kUsingValidation) {
               StopWatch<uint64_t> t((uint64_t&)options.time_validate);
               std::string new_seq_val;
@@ -2747,10 +2780,12 @@ Status DBImpl::ParallelSGet(const ReadOptions& options, const Slice& skey,
         int sz = *(int *)p;
         p += sizeof(int);
         std::string pkey(p, sz - sizeof(SequenceNumber));
-        if (!resultSetofKeysFound.contains(pkey)) {
+        SequenceNumber cur_seq =
+            *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+        if (cur_seq == -1) {
+          resultSetofKeysFound.insert(pkey);
+        } else if (!resultSetofKeysFound.contains(pkey)) {
           bool check_skip = false;
-          SequenceNumber cur_seq =
-              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
           if (config::kUsingValidation) {
             StopWatch<uint64_t> t((uint64_t&)options.time_validate);
             std::string new_seq_val;
@@ -2784,10 +2819,12 @@ Status DBImpl::ParallelSGet(const ReadOptions& options, const Slice& skey,
           int sz = *(int*)p;
           p += sizeof(int);
           std::string pkey(p, sz - sizeof(SequenceNumber));
-          if (!resultSetofKeysFound.contains(pkey)) {
+          SequenceNumber cur_seq =
+              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+          if (cur_seq == -1) {
+            resultSetofKeysFound.insert(pkey);
+          } else if (!resultSetofKeysFound.contains(pkey)) {
             bool check_skip = false;
-            SequenceNumber cur_seq =
-                *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
             if (config::kUsingValidation) {
               StopWatch<uint64_t> t((uint64_t&)options.time_validate);
               std::string new_seq_val;
@@ -2879,8 +2916,10 @@ Status DBImpl::LSMSScanPKeyOnly(const ReadOptions& options, const Slice& skey,
       std::string pkey(p, sz - sizeof(SequenceNumber));
       SequenceNumber cur_seq =
           *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
-      bool valid = false;
-      if (!result_keys_found.contains(pkey)) {
+      bool valid = config::kLSMSISync;
+      if (cur_seq == -1) {
+        result_keys_found.insert(pkey);
+      } else if (!result_keys_found.contains(pkey)) {
         if (config::kUsingValidation) {
           StopWatch<uint64_t> t((uint64_t&)options.time_validate);
           std::string new_seq_val;
@@ -2889,7 +2928,7 @@ Status DBImpl::LSMSScanPKeyOnly(const ReadOptions& options, const Slice& skey,
             SequenceNumber new_seq = *(SequenceNumber*)new_seq_val.data();
             valid = new_seq == cur_seq;
           }
-        } else {
+        } else if (!config::kLSMSISync) {
           // check primary index
           StopWatch<uint64_t> t((uint64_t&)options.time_pdb);
           std::string value;
@@ -3741,17 +3780,17 @@ Status DB::Open(const Options& options, const std::string& dbname, DB** dbptr) {
       s = DB::Open(pkioptions, pki_name, &impl->primary_key_index);
     }
 #elif SEC_IDX_TYPE == 3
-      impl->sec_idx = new SecIdxPMasstree();
+    impl->sec_idx = new SecIdxPMasstree();
 #elif SEC_IDX_TYPE == 4
-      impl->sec_idx = new SecIdxPMasstreeComposite();
+    impl->sec_idx = new SecIdxPMasstreeComposite();
 #elif SEC_IDX_TYPE == 5
-      impl->sec_idx = new SecIdxPMasstreeLog();
+    impl->sec_idx = new SecIdxPMasstreeLog();
 #elif SEC_IDX_TYPE == 6
-      impl->sec_idx = new SecIdxFastFair();
+    impl->sec_idx = new SecIdxFastFair();
 #elif SEC_IDX_TYPE == 7
-      impl->sec_idx = new SecIdxFastFairComposite();
+    impl->sec_idx = new SecIdxFastFairComposite();
 #elif SEC_IDX_TYPE == 8
-      impl->sec_idx = new SecIdxFastFairLog();
+    impl->sec_idx = new SecIdxFastFairLog();
 #endif
   }
 

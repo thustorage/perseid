@@ -51,7 +51,8 @@ cmake .. -DCMAKE_BUILD_TYPE=Release \
 -DVALIDATE=true \
 -DPRUNE_SEQ=true \
 -DPAL_PDB=false \
--DIDX_ONLY=true
+-DIDX_ONLY=true \
+-DLSMSI_SYNC=false
 make ${APP_NAME} -j
 
 

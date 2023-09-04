@@ -231,6 +231,7 @@ struct WriteOptions {
   //
   // Default: false
   bool sync;
+  // uint64_t sec_idx_write_time = 0;
 
   WriteOptions()
       : sync(false) {

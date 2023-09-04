@@ -1259,10 +1259,12 @@ Status Version::ParallelSGetNaive(const ReadOptions& options,
           p += sizeof(int);
           std::string pkey(p, sz - sizeof(SequenceNumber));
           std::string pValue;
-          if (!resultSetofKeysFound->contains(pkey)) {
+          SequenceNumber cur_seq =
+              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+          if (cur_seq == -1) {
+            resultSetofKeysFound->insert(pkey);
+          } else if (!resultSetofKeysFound->contains(pkey)) {
             bool pass = false;
-            SequenceNumber cur_seq =
-                *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
             if (config::kUsingValidation) {
               StopWatch<uint64_t> t((uint64_t&)options.time_validate);
               std::string new_seq_val;
@@ -1407,10 +1409,12 @@ Status Version::ParallelSGet(const ReadOptions& options, SGetShare* share,
           p += sizeof(int);
           std::string pkey(p, sz - sizeof(SequenceNumber));
           std::string pValue;
-          if (!resultSetofKeysFound->contains(pkey)) {
+          SequenceNumber cur_seq =
+              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+          if (cur_seq == -1) {
+            resultSetofKeysFound->insert(pkey);
+          } else if (!resultSetofKeysFound->contains(pkey)) {
             bool pass = false;
-            SequenceNumber cur_seq =
-                *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
             if (config::kUsingValidation) {
               StopWatch<uint64_t> t((uint64_t&)options.time_validate);
               std::string new_seq_val;
@@ -1556,9 +1560,10 @@ Status Version::SGetPKeyOnly(const ReadOptions& options, const LookupKey& key,
           std::string pkey(p, sz - sizeof(SequenceNumber));
           SequenceNumber cur_seq =
               *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
-          bool valid = false;
-
-          if (!result_keys_found->contains(pkey)) {
+          bool valid = config::kLSMSISync;
+          if (cur_seq == -1) {
+            result_keys_found->insert(pkey);
+          } else if (!result_keys_found->contains(pkey)) {
             if (config::kUsingValidation) {
               StopWatch<uint64_t> t((uint64_t&)options.time_validate);
               std::string new_seq_val;
@@ -1568,7 +1573,7 @@ Status Version::SGetPKeyOnly(const ReadOptions& options, const LookupKey& key,
                 SequenceNumber new_seq = *(SequenceNumber*)new_seq_val.data();
                 valid = new_seq == cur_seq;
               }
-            } else {
+            } else if (!config::kLSMSISync) {
               // check primary index
               StopWatch<uint64_t> t((uint64_t&)options.time_pdb);
               std::string value;
@@ -1721,7 +1726,11 @@ Status Version::SGet(const ReadOptions& options, const LookupKey& k,
           p += sizeof(int);
           std::string pkey(p, sz - sizeof(SequenceNumber));
           std::string pValue;
-          if (!resultSetofKeysFound->contains(pkey)) {
+          SequenceNumber cur_seq =
+              *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
+          if (cur_seq == -1) {
+            resultSetofKeysFound->insert(pkey);
+          } else if (!resultSetofKeysFound->contains(pkey)) {
             Status db_status;
             SequenceNumber seq = -1;
             bool pass = false;
@@ -1731,8 +1740,6 @@ Status Version::SGet(const ReadOptions& options, const LookupKey& k,
               db_status = pri_key_index->Get(options, pkey, &new_seq_val);
               if (db_status.ok() && !db_status.IsNotFound()) {
                 SequenceNumber new_seq = *(SequenceNumber *)new_seq_val.data();
-                SequenceNumber cur_seq =
-                    *(SequenceNumber*)(p + sz - sizeof(SequenceNumber));
                 // primary key index checked
                 if (new_seq == cur_seq) {
                   seq = cur_seq;

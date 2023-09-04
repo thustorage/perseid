@@ -5,6 +5,8 @@ if [[ $(basename $PWD) != "scripts" ]]; then
   exit
 fi
 
+ulimit -n 65535
+
 ./sub/eval_fig7a.sh $@
 ./sub/eval_fig7b.sh $@
 ./sub/eval_fig7c.sh $@
